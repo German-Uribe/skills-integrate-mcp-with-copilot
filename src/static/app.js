@@ -3,6 +3,31 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const teacherRequired = document.getElementById("teacher-required");
+  const accountMenu = document.getElementById("account-menu");
+  const accountStatus = document.getElementById("account-status");
+  const loginDialog = document.getElementById("login-dialog");
+  const loginForm = document.getElementById("login-form");
+  const loginError = document.getElementById("login-error");
+  const openLoginButton = document.getElementById("open-login");
+  const logoutButton = document.getElementById("logout");
+  let authorization = null;
+
+  function updateAuthenticationUI(username = null) {
+    const isTeacher = Boolean(username);
+    signupForm.hidden = !isTeacher;
+    teacherRequired.hidden = isTeacher;
+    openLoginButton.hidden = isTeacher;
+    logoutButton.classList.toggle("hidden", !isTeacher);
+    accountStatus.textContent = isTeacher ? `Signed in as ${username}` : "Not signed in";
+    fetchActivities();
+  }
+
+  function encodeBasicCredentials(username, password) {
+    const bytes = new TextEncoder().encode(`${username}:${password}`);
+    const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+    return `Basic ${btoa(binary)}`;
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -12,6 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.innerHTML = '<option value="">-- Select an activity --</option>';
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -30,7 +56,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${email}</span>${authorization ? `<button class="delete-btn" aria-label="Remove ${email} from ${name}" data-activity="${name}" data-email="${email}">Remove</button>` : ""}</li>`
                   )
                   .join("")}
               </ul>
@@ -80,6 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/unregister?email=${encodeURIComponent(email)}`,
         {
           method: "DELETE",
+          headers: { Authorization: authorization },
         }
       );
 
@@ -124,6 +151,7 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/signup?email=${encodeURIComponent(email)}`,
         {
           method: "POST",
+          headers: { Authorization: authorization },
         }
       );
 
@@ -153,6 +181,52 @@ document.addEventListener("DOMContentLoaded", () => {
       messageDiv.classList.remove("hidden");
       console.error("Error signing up:", error);
     }
+  });
+
+  openLoginButton.addEventListener("click", () => {
+    accountMenu.open = false;
+    loginError.classList.add("hidden");
+    loginDialog.showModal();
+  });
+
+  document.getElementById("cancel-login").addEventListener("click", () => {
+    loginDialog.close();
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+    const credentials = encodeBasicCredentials(username, password);
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { Authorization: credentials },
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        loginError.textContent = result.detail || "Unable to sign in.";
+        loginError.classList.remove("hidden");
+        return;
+      }
+
+      authorization = credentials;
+      loginForm.reset();
+      loginDialog.close();
+      updateAuthenticationUI(result.username);
+    } catch (error) {
+      loginError.textContent = "Unable to sign in. Please try again.";
+      loginError.classList.remove("hidden");
+      console.error("Error signing in:", error);
+    }
+  });
+
+  logoutButton.addEventListener("click", () => {
+    authorization = null;
+    accountMenu.open = false;
+    updateAuthenticationUI();
   });
 
   // Initialize app

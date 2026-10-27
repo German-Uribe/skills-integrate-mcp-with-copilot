@@ -6,13 +6,22 @@ for extracurricular activities at Mergington High School.
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi import Depends
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+import hashlib
+import hmac
+import json
 import os
 from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+security = HTTPBasic(auto_error=False)
+teachers_file = Path(os.environ.get(
+    "TEACHERS_FILE", str(Path(__file__).with_name("teachers.json"))))
+password_iterations = 600_000
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -88,8 +97,61 @@ def get_activities():
     return activities
 
 
+def authenticate_teacher(
+    credentials: HTTPBasicCredentials | None = Depends(security),
+) -> str:
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Teacher login required",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    try:
+        teacher_data = json.loads(teachers_file.read_text(encoding="utf-8"))
+        teachers = teacher_data["teachers"]
+    except FileNotFoundError:
+        teachers = []
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        raise HTTPException(status_code=500, detail="Teacher credentials are unavailable")
+
+    for teacher in teachers:
+        if not isinstance(teacher, dict) or teacher.get("username") != credentials.username:
+            continue
+        try:
+            salt = bytes.fromhex(teacher["salt"])
+            expected_hash = teacher["password_hash"]
+        except (KeyError, TypeError, ValueError):
+            break
+
+        password_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            credentials.password.encode("utf-8"),
+            salt,
+            password_iterations,
+        ).hex()
+        if hmac.compare_digest(password_hash, expected_hash):
+            return credentials.username
+        break
+
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid teacher username or password",
+        headers={"WWW-Authenticate": "Basic"},
+    )
+
+
+@app.post("/auth/login")
+def login(teacher: str = Depends(authenticate_teacher)):
+    return {"username": teacher}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(
+    activity_name: str,
+    email: str,
+    teacher: str = Depends(authenticate_teacher),
+):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -111,7 +173,11 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    email: str,
+    teacher: str = Depends(authenticate_teacher),
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
